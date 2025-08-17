@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SunPanel书签转换工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    
+    <!-- 配置Tailwind自定义颜色和字体 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3B82F6', // 蓝色 - 通用转SunPanel
+                        secondary: '#10B981', // 绿色 - SunPanel转通用
+                        neutral: '#64748B',
+                        light: '#F8FAFC',
+                        dark: '#1E293B'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {
+                content-visibility: auto;
+            }
+            .card-hover {
+                @apply transition-all duration-300 hover:shadow-lg hover:-translate-y-1;
+            }
+            .btn-primary {
+                @apply bg-primary hover:bg-primary/90 text-white font-medium py-2 px-4 rounded-lg transition-all duration-300;
+            }
+            .btn-secondary {
+                @apply bg-secondary hover:bg-secondary/90 text-white font-medium py-2 px-4 rounded-lg transition-all duration-300;
+            }
+            .btn-outline {
+                @apply border border-neutral/30 hover:border-primary hover:text-primary text-neutral font-medium py-2 px-4 rounded-lg transition-all duration-300;
+            }
+            /* 优化的切换按钮样式 */
+            .mode-switch {
+                position: relative;
+                display: inline-block;
+                width: 60px;
+                height: 30px;
+            }
+            .mode-switch input {
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+            .mode-slider {
+                position: absolute;
+                cursor: pointer;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background-color: #10B981; /* 默认绿色 - SunPanel转通用 */
+                transition: .4s;
+                border-radius: 30px;
+                overflow: hidden;
+            }
+            .mode-slider:before {
+                position: absolute;
+                content: "";
+                height: 22px;
+                width: 22px;
+                left: 4px;
+                bottom: 4px;
+                background-color: white;
+                transition: .4s;
+                border-radius: 50%;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+            }
+            input:checked + .mode-slider {
+                background-color: #3B82F6; /* 选中时蓝色 - 通用转SunPanel */
+            }
+            input:checked + .mode-slider:before {
+                transform: translateX(30px);
+            }
+            /* 模式指示器 */
+            .mode-indicator {
+                position: absolute;
+                top: 50%;
+                transform: translateY(-50%);
+                font-size: 10px;
+                font-weight: bold;
+                color: white;
+                transition: opacity .3s;
+                width: 50%;
+                text-align: center;
+                pointer-events: none;
+            }
+            .mode-indicator.from {
+                left: 0;
+                opacity: 1;
+            }
+            input:checked + .mode-slider .mode-indicator.from {
+                opacity: 0;
+            }
+            .mode-indicator.to {
+                right: 0;
+                opacity: 0;
+            }
+            input:checked + .mode-slider .mode-indicator.to {
+                opacity: 1;
+            }
+            /* 上传区域样式 */
+            .upload-area {
+                @apply border-2 border-dashed border-neutral/30 rounded-lg p-10 text-center cursor-pointer transition-all duration-300;
+            }
+            .upload-area:hover, .upload-area.active {
+                @apply border-primary bg-primary/5;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans text-dark">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- 头部 -->
+        <header class="mb-10 text-center">
+            <div class="inline-flex items-center justify-center mb-2">
+                <i class="fa fa-code-fork text-primary text-3xl mr-2"></i>
+                <h1 class="text-[clamp(1.8rem,5vw,2.5rem)] font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary">
+                    SunPanel书签转换工具
+                </h1>
+            </div>
+            <p class="text-neutral text-lg max-w-2xl mx-auto mb-6" id="modeDescription">
+                解析SunPanel配置文件，转换为通用可识别的格式
+            </p>
+            
+            <!-- 优化的模式切换 -->
+            <div class="flex items-center justify-center space-x-4 my-6">
+                <span id="mode1Text" class="text-secondary font-medium transition-colors duration-300">SunPanel → 通用格式</span>
+                <label class="mode-switch">
+                    <input type="checkbox" id="modeToggle">
+                    <span class="mode-slider">
+                        <span class="mode-indicator from">→</span>
+                        <span class="mode-indicator to">←</span>
+                    </span>
+                </label>
+                <span id="mode2Text" class="text-primary font-medium transition-colors duration-300">通用格式 → SunPanel</span>
+            </div>
+        </header>
+
+        <!-- 上传区域 -->
+        <div class="bg-white rounded-xl shadow-sm p-8 mb-8 card-hover">
+            <!-- 上传区域核心容器 -->
+            <div id="uploadContainer" class="relative">
+                <!-- 实际处理文件的隐藏输入 -->
+                <input type="file" id="fileInput" class="hidden" accept=".json,.sun-panel.json">
+                
+                <!-- 视觉上传区域 -->
+                <div id="uploadArea" class="upload-area">
+                    <i class="fa fa-cloud-upload text-5xl text-primary/60 mb-4"></i>
+                    <h3 class="text-xl font-medium text-dark mb-2" id="uploadTitle">点击或拖拽文件到这里</h3>
+                    <p class="text-neutral mb-6" id="uploadSubtitle">支持 .json 和 .sun-panel.json 格式的配置文件</p>
+                    <button id="browseBtn" class="btn-secondary flex items-center mx-auto">
+                        <i class="fa fa-folder-open mr-2"></i>选择文件
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 操作按钮区域 -->
+        <div class="flex flex-wrap gap-4 mb-6" id="actionButtons" style="display: none;">
+            <button id="exportExcelBtn" class="btn-secondary flex items-center">
+                <i class="fa fa-file-excel-o mr-2"></i>导出Excel
+            </button>
+            <button id="exportHtmlBtn" class="btn-secondary flex items-center">
+                <i class="fa fa-file-html-o mr-2"></i>导出HTML
+            </button>
+            <button id="exportSunPanelBtn" class="btn-primary flex items-center" style="display: none;">
+                <i class="fa fa-file-code-o mr-2"></i>导出SunPanel格式
+            </button>
+            <button id="copyBtn" class="btn-outline flex items-center">
+                <i class="fa fa-copy mr-2"></i>复制结果
+            </button>
+            <button id="clearBtn" class="btn-outline flex items-center ml-auto">
+                <i class="fa fa-trash mr-2"></i>清除结果
+            </button>
+        </div>
+
+        <!-- 结果区域 -->
+        <div class="bg-white rounded-xl shadow-sm overflow-hidden mb-8">
+            <!-- 加载状态 -->
+            <div id="loadingIndicator" class="p-16 text-center" style="display: none;">
+                <div class="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mb-4"></div>
+                <p class="text-neutral" id="loadingText">正在解析文件并获取网站描述...</p>
+            </div>
+
+            <!-- 错误消息 -->
+            <div id="errorMessage" class="p-6 bg-red-50 border-l-4 border-red-500" style="display: none;">
+                <div class="flex items-start">
+                    <i class="fa fa-exclamation-circle text-red-500 mt-1 mr-3"></i>
+                    <p class="text-red-700 font-medium" id="errorText"></p>
+                </div>
+            </div>
+
+            <!-- 结果表格 -->
+            <div id="resultTable" class="overflow-x-auto" style="display: none;">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr id="tableHeaders">
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">分类排序</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">分类名称</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">网站排序</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">网站名称</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">网站描述</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">外网网址</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">内网网址</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultBody" class="bg-white divide-y divide-gray-100">
+                        <!-- 结果将在这里动态生成 -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 初始状态提示 -->
+            <div id="initialMessage" class="p-16 text-center text-neutral">
+                <i class="fa fa-info-circle text-5xl mb-4 text-gray-200"></i>
+                <p>请上传文件进行转换</p>
+            </div>
+        </div>
+
+        <!-- 统计信息 -->
+        <div id="statsContainer" class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8" style="display: none;">
+            <div class="bg-white rounded-lg shadow-sm p-5 border-l-4 border-primary card-hover">
+                <p class="text-sm text-neutral">总分类数</p>
+                <p class="text-2xl font-bold text-dark" id="totalCategories">0</p>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-secondary card-hover">
+                <p class="text-sm text-neutral">总网站数</p>
+                <p class="text-2xl font-bold text-dark" id="totalWebsites">0</p>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-purple-500 card-hover">
+                <p class="text-sm text-neutral">处理时间</p>
+                <p class="text-2xl font-bold text-dark" id="processTime">0 ms</p>
+            </div>
+        </div>
+
+        <!-- 页脚 -->
+        <footer class="text-center text-neutral text-sm py-6">
+            <p>SunPanel书签转换工具 &copy; 2025 | 本地处理，保护隐私</p>
+            <p class="mt-2">本站点为<a href="https://github.com/hslr-s/sun-panel" target="_blank" class="text-primary hover:underline">Sun-Panel</a>书签转换辅助工具，由小魏摸鱼时编写！</p>
+            <p class="mt-1">衷心感谢大佬<a href="https://blog.enianteam.com/u/sun/content/11" target="_blank" class="text-primary hover:underline">@红烧猎人</a>开发这款NAS导航面板 <i class="fa fa-hand-peace-o"></i></p>
+        </footer>
+    </div>
+
+    <script>
+        // 全局变量
+        let parsedData = [];
+        let currentMode = 'sunpanel-to-common'; // 默认模式: sunpanel-to-common 或 common-to-sunpanel
+        
+        // DOM元素
+        const modeToggle = document.getElementById('modeToggle');
+        const modeDescription = document.getElementById('modeDescription');
+        const mode1Text = document.getElementById('mode1Text');
+        const mode2Text = document.getElementById('mode2Text');
+        const uploadTitle = document.getElementById('uploadTitle');
+        const uploadSubtitle = document.getElementById('uploadSubtitle');
+        const fileInput = document.getElementById('fileInput');
+        const uploadArea = document.getElementById('uploadArea');
+        const browseBtn = document.getElementById('browseBtn');
+        const initialMessage = document.getElementById('initialMessage');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const loadingText = document.getElementById('loadingText');
+        const errorMessage = document.getElementById('errorMessage');
+        const errorText = document.getElementById('errorText');
+        const resultTable = document.getElementById('resultTable');
+        const tableHeaders = document.getElementById('tableHeaders');
+        const resultBody = document.getElementById('resultBody');
+        const actionButtons = document.getElementById('actionButtons');
+        const exportExcelBtn = document.getElementById('exportExcelBtn');
+        const exportHtmlBtn = document.getElementById('exportHtmlBtn');
+        const exportSunPanelBtn = document.getElementById('exportSunPanelBtn');
+        const copyBtn = document.getElementById('copyBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const statsContainer = document.getElementById('statsContainer');
+        const totalCategories = document.getElementById('totalCategories');
+        const totalWebsites = document.getElementById('totalWebsites');
+        const processTime = document.getElementById('processTime');
+
+        // 初始化上传功能 - 核心修复部分
+        function initUploadFunctions() {
+            // 验证DOM元素是否正确加载
+            console.log('初始化上传功能 - 元素检查:', {
+                uploadArea: !!uploadArea,
+                fileInput: !!fileInput,
+                browseBtn: !!browseBtn
+            });
+
+            // 触发文件选择对话框的函数
+            function openFileDialog() {
+                console.log('打开文件选择对话框');
+                // 重置输入以确保change事件能触发
+                fileInput.value = '';
+                // 触发点击
+                fileInput.click();
+            }
+
+            // 浏览按钮点击事件 - 直接绑定
+            browseBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('浏览按钮被点击');
+                openFileDialog();
+            }, false);
+
+            // 上传区域点击事件 - 确保所有区域点击都有效
+            uploadArea.addEventListener('click', function(e) {
+                // 避免点击按钮时重复触发
+                if (e.target !== browseBtn && !browseBtn.contains(e.target)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('上传区域被点击');
+                    openFileDialog();
+                }
+            }, false);
+
+            // 拖拽事件处理 - 确保拖放功能正常
+            uploadArea.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                uploadArea.classList.add('active');
+                console.log('文件被拖入上传区域');
+            }, false);
+
+            uploadArea.addEventListener('dragleave', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                uploadArea.classList.remove('active');
+                console.log('文件被拖离上传区域');
+            }, false);
+
+            uploadArea.addEventListener('drop', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                uploadArea.classList.remove('active');
+                console.log('文件被放置在上传区域');
+                
+                if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    console.log('检测到拖放的文件:', e.dataTransfer.files[0].name);
+                    handleFile(e.dataTransfer.files[0]);
+                } else {
+                    console.log('未检测到有效文件');
+                }
+            }, false);
+
+            // 文件选择事件 - 核心处理
+            fileInput.addEventListener('change', function(e) {
+                e.stopPropagation();
+                if (this.files && this.files.length > 0) {
+                    console.log('文件选择器选择了文件:', this.files[0].name);
+                    handleFile(this.files[0]);
+                } else {
+                    console.log('未选择任何文件');
+                }
+            }, false);
+
+            // 全局阻止拖放默认行为，确保我们的事件能正常工作
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                document.addEventListener(eventName, function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }, false);
+            });
+        }
+
+        // 根据当前模式更新UI
+        function updateUIForMode() {
+            if (currentMode === 'sunpanel-to-common') {
+                // SunPanel → 通用格式（绿色主题）
+                modeDescription.textContent = '解析SunPanel配置文件，转换为通用可识别的格式';
+                uploadTitle.textContent = '点击或拖拽文件到这里';
+                uploadSubtitle.textContent = '支持 .json 和 .sun-panel.json 格式的配置文件';
+                fileInput.accept = '.json,.sun-panel.json';
+                exportExcelBtn.style.display = 'flex';
+                exportHtmlBtn.style.display = 'flex';
+                exportSunPanelBtn.style.display = 'none';
+                browseBtn.className = 'btn-secondary flex items-center mx-auto';
+                
+                // 恢复表格 headers
+                tableHeaders.innerHTML = `
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">分类排序</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">分类名称</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">网站排序</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">网站名称</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">网站描述</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">外网网址</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">内网网址</th>
+                `;
+            } else {
+                // 通用格式 → SunPanel（蓝色主题）
+                modeDescription.textContent = '解析通用书签文件，转换为SunPanel可导入的格式';
+                uploadTitle.textContent = '点击或拖拽书签文件到这里';
+                uploadSubtitle.textContent = '支持 .html 格式的书签文件（浏览器导出的书签）';
+                fileInput.accept = '.html';
+                exportExcelBtn.style.display = 'none';
+                exportHtmlBtn.style.display = 'none';
+                exportSunPanelBtn.style.display = 'flex';
+                browseBtn.className = 'btn-primary flex items-center mx-auto';
+                
+                // 调整表格 headers
+                tableHeaders.innerHTML = `
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">分类排序</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">分类名称</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">网站排序</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">网站名称</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">网站描述</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">网址</th>
+                    <th class="px-6 py-4 text-left text-xs font-semibold text-neutral uppercase tracking-wider">内网网址</th>
+                `;
+            }
+        }
+
+        // 处理文件解析
+        async function handleFile(file) {
+            // 重置界面
+            resetUI();
+            
+            // 显示加载状态
+            initialMessage.style.display = 'none';
+            loadingIndicator.style.display = 'block';
+            
+            // 根据当前模式验证文件格式
+            if (currentMode === 'sunpanel-to-common') {
+                if (!file.name.endsWith('.sun-panel.json') && !file.name.endsWith('.json')) {
+                    showError('请选择 .sun-panel.json 或 .json 格式的文件');
+                    return;
+                }
+                loadingText.textContent = '正在解析SunPanel文件并获取网站描述...';
+            } else {
+                if (!file.name.endsWith('.html')) {
+                    showError('请选择 .html 格式的书签文件');
+                    return;
+                }
+                loadingText.textContent = '正在解析书签文件并转换为SunPanel格式...';
+            }
+
+            const reader = new FileReader();
+            const startTime = performance.now();
+            
+            reader.onload = async (e) => {
+                try {
+                    if (currentMode === 'sunpanel-to-common') {
+                        // SunPanel → 通用格式
+                        const data = JSON.parse(e.target.result);
+                        await processSunPanelToCommon(data);
+                    } else {
+                        // 通用格式 → SunPanel
+                        const htmlContent = e.target.result;
+                        await processCommonToSunPanel(htmlContent);
+                    }
+                    
+                    const endTime = performance.now();
+                    const processDuration = Math.round(endTime - startTime);
+                    processTime.textContent = `${processDuration} ms`;
+                    
+                } catch (err) {
+                    if (currentMode === 'sunpanel-to-common') {
+                        showError(`解析失败：SunPanel文件格式不正确或内容有误<br>错误信息：${err.message}`);
+                    } else {
+                        showError(`解析失败：书签文件格式不正确或内容有误<br>错误信息：${err.message}`);
+                    }
+                    console.error(err);
+                }
+            };
+            
+            reader.onerror = () => {
+                showError('读取文件时发生错误，请重试');
+            };
+            
+            // 读取文件
+            reader.readAsText(file);
+        }
+
+        // 处理SunPanel转通用格式
+        async function processSunPanelToCommon(data) {
+            const icons = data.icons || [];
+            icons.sort((a, b) => (a.sort || 0) - (b.sort || 0));
+            
+            parsedData = [];
+            let totalSites = 0;
+            let tableHtml = '';
+            
+            // 遍历分类
+            for (const category of icons) {
+                const catSort = category.sort || 0;
+                const catTitle = category.title || '未知分类';
+                const children = category.children || [];
+                const siteCount = children.length;
+                totalSites += siteCount;
+                
+                children.sort((a, b) => (a.sort || 0) - (b.sort || 0));
+                
+                if (siteCount > 0) {
+                    for (let index = 0; index < children.length; index++) {
+                        const site = children[index];
+                        const siteSort = index + 1;
+                        const siteTitle = site.title || '未知名称';
+                        const url = site.url || '无网址';
+                        const lanUrl = site.lanUrl || '无局域网地址';
+                        
+                        let description = site.description || site.desc || '';
+                        if (!description) {
+                            description = await getWebsiteDescription(siteTitle, url);
+                        }
+                        
+                        parsedData.push({
+                            '分类排序': catSort,
+                            '分类名称': catTitle,
+                            '包含数量': siteCount,
+                            '网站排序': siteSort,
+                            '网站名称': siteTitle,
+                            '网站描述': description,
+                            '外网网址': url,
+                            '内网网址': lanUrl
+                        });
+                        
+                        tableHtml += `
+                            <tr class="hover:bg-gray-50 transition-colors">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">${catSort}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-dark">
+                                    ${catTitle} <span class="text-neutral/70 text-xs">(${siteCount})</span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">${siteSort}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-dark">${siteTitle}</td>
+                                <td class="px-6 py-4 text-sm text-neutral max-w-md">${description}</td>
+                                <td class="px-6 py-4 text-sm text-neutral">
+                                    <a href="${url}" target="_blank" class="text-primary hover:underline break-all">${url}</a>
+                                </td>
+                                <td class="px-6 py-4 text-sm text-neutral">
+                                    <a href="${lanUrl}" target="_blank" class="text-secondary hover:underline break-all">${lanUrl}</a>
+                                </td>
+                            </tr>
+                        `;
+                    }
+                } else {
+                    parsedData.push({
+                        '分类排序': catSort,
+                        '分类名称': catTitle,
+                        '包含数量': 0,
+                        '网站排序': '',
+                        '网站名称': '无网站信息',
+                        '网站描述': '',
+                        '外网网址': '',
+                        '内网网址': ''
+                    });
+                    
+                    tableHtml += `
+                        <tr class="hover:bg-gray-50 transition-colors">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">${catSort}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-dark">
+                                ${catTitle} <span class="text-neutral/70 text-xs">(0)</span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">-</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">无网站信息</td>
+                            <td class="px-6 py-4 text-sm text-neutral">-</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">-</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">-</td>
+                        </tr>
+                    `;
+                }
+            }
+            
+            resultBody.innerHTML = tableHtml;
+            totalCategories.textContent = icons.length;
+            totalWebsites.textContent = totalSites;
+            
+            loadingIndicator.style.display = 'none';
+            resultTable.style.display = 'block';
+            actionButtons.style.display = 'flex';
+            statsContainer.style.display = 'grid';
+        }
+
+        // 处理通用书签转SunPanel格式
+        async function processCommonToSunPanel(htmlContent) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlContent, 'text/html');
+            
+            const categories = [];
+            let categoryElements = Array.from(doc.querySelectorAll('h3'));
+            
+            if (categoryElements.length === 0) {
+                categoryElements = [{ textContent: '默认分类' }];
+            }
+            
+            categoryElements.forEach((categoryEl, catIndex) => {
+                const catSort = catIndex + 1;
+                const catTitle = categoryEl.textContent.trim() || `分类 ${catSort}`;
+                
+                let siteElements = [];
+                if (categoryEl.nextElementSibling && categoryEl.nextElementSibling.tagName === 'DL') {
+                    siteElements = Array.from(categoryEl.nextElementSibling.querySelectorAll('a'));
+                } else if (categoryEl.parentNode.tagName === 'DL') {
+                    siteElements = Array.from(doc.querySelectorAll('a'));
+                }
+                
+                const children = [];
+                siteElements.forEach((siteEl, siteIndex) => {
+                    const siteSort = siteIndex + 1;
+                    const siteTitle = siteEl.textContent.trim() || `网站 ${siteSort}`;
+                    const url = siteEl.href || '';
+                    
+                    let description = siteEl.title || '';
+                    if (!description) {
+                        description = getWebsiteDescription(siteTitle, url);
+                    }
+                    
+                    children.push({
+                        '分类排序': catSort,
+                        '分类名称': catTitle,
+                        '网站排序': siteSort,
+                        '网站名称': siteTitle,
+                        '网站描述': description,
+                        '网址': url,
+                        '内网网址': ''
+                    });
+                });
+                
+                categories.push({
+                    title: catTitle,
+                    sort: catSort,
+                    children: children,
+                    count: children.length
+                });
+            });
+            
+            parsedData = [];
+            let tableHtml = '';
+            let totalSites = 0;
+            
+            categories.forEach(category => {
+                totalSites += category.count;
+                
+                if (category.count > 0) {
+                    category.children.forEach(site => {
+                        parsedData.push(site);
+                        
+                        tableHtml += `
+                            <tr class="hover:bg-gray-50 transition-colors">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">${site['分类排序']}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-dark">
+                                    ${site['分类名称']} <span class="text-neutral/70 text-xs">(${category.count})</span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">${site['网站排序']}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-dark">${site['网站名称']}</td>
+                                <td class="px-6 py-4 text-sm text-neutral max-w-md">${site['网站描述']}</td>
+                                <td class="px-6 py-4 text-sm text-neutral">
+                                    <a href="${site['网址']}" target="_blank" class="text-primary hover:underline break-all">${site['网址']}</a>
+                                </td>
+                                <td class="px-6 py-4 text-sm text-neutral">
+                                    <input type="text" placeholder="输入内网地址" 
+                                        class="border border-gray-300 rounded px-2 py-1 text-sm w-full"
+                                        data-category="${site['分类排序']}"
+                                        data-site="${site['网站排序']}">
+                                </td>
+                            </tr>
+                        `;
+                    });
+                } else {
+                    parsedData.push({
+                        '分类排序': category.sort,
+                        '分类名称': category.title,
+                        '网站排序': '',
+                        '网站名称': '无网站信息',
+                        '网站描述': '',
+                        '网址': '',
+                        '内网网址': ''
+                    });
+                    
+                    tableHtml += `
+                        <tr class="hover:bg-gray-50 transition-colors">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">${category.sort}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-dark">
+                                ${category.title} <span class="text-neutral/70 text-xs">(0)</span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">-</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">无网站信息</td>
+                            <td class="px-6 py-4 text-sm text-neutral">-</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">-</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-neutral">-</td>
+                        </tr>
+                    `;
+                }
+            });
+            
+            resultBody.innerHTML = tableHtml;
+            
+            document.querySelectorAll('input[data-category]').forEach(input => {
+                input.addEventListener('change', function() {
+                    const catSort = this.getAttribute('data-category');
+                    const siteSort = this.getAttribute('data-site');
+                    const value = this.value;
+                    
+                    const index = parsedData.findIndex(item => 
+                        item['分类排序'] == catSort && item['网站排序'] == siteSort
+                    );
+                    if (index !== -1) {
+                        parsedData[index]['内网网址'] = value;
+                    }
+                });
+            });
+            
+            totalCategories.textContent = categories.length;
+            totalWebsites.textContent = totalSites;
+            
+            loadingIndicator.style.display = 'none';
+            resultTable.style.display = 'block';
+            actionButtons.style.display = 'flex';
+            statsContainer.style.display = 'grid';
+        }
+
+        // 获取网站描述
+        function getWebsiteDescription(siteTitle, url) {
+            try {
+                const urlObj = new URL(url);
+                return `${siteTitle} - ${urlObj.hostname} 相关服务`;
+            } catch (e) {
+                return `未提供 ${siteTitle} 的描述信息`;
+            }
+        }
+
+        // 导出为Excel
+        exportExcelBtn.addEventListener('click', () => {
+            if (parsedData.length === 0) {
+                alert('没有可导出的数据');
+                return;
+            }
+            
+            const worksheet = XLSX.utils.json_to_sheet(parsedData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'SunPanel解析结果');
+            
+            const date = new Date();
+            const fileName = `SunPanel解析结果_${date.getFullYear()}${(date.getMonth()+1).toString().padStart(2,'0')}${date.getDate().toString().padStart(2,'0')}.xlsx`;
+            
+            XLSX.writeFile(workbook, fileName);
+        });
+
+        // 导出为HTML
+        exportHtmlBtn.addEventListener('click', () => {
+            if (parsedData.length === 0) {
+                alert('没有可导出的数据');
+                return;
+            }
+            
+            const categories = {};
+            parsedData.forEach(item => {
+                const key = `${item['分类排序']}-${item['分类名称']}`;
+                if (!categories[key]) {
+                    categories[key] = {
+                        name: item['分类名称'],
+                        sort: item['分类排序'],
+                        sites: []
+                    };
+                }
+                if (item['网站名称'] !== '无网站信息') {
+                    categories[key].sites.push(item);
+                }
+            });
+            
+            let htmlContent = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>SunPanel解析结果 - 收藏夹</title>
+    <meta name="generator" content="SunPanel书签转换工具">
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .category { margin: 20px 0; padding: 10px; border: 1px solid #eee; border-radius: 5px; }
+        .category h2 { margin-top: 0; color: #333; }
+        .site { margin: 8px 0; padding-left: 15px; }
+        .site a { color: #0066cc; text-decoration: none; }
+        .site a:hover { text-decoration: underline; }
+        .desc { font-size: 0.9em; color: #666; margin-left: 5px; }
+    </style>
+</head>
+<body>
+    <h1>SunPanel解析结果</h1>
+`;
+            
+            Object.values(categories).sort((a, b) => a.sort - b.sort).forEach(category => {
+                htmlContent += `    <div class="category">
+        <h2>${category.name} (${category.sites.length})</h2>
+`;
+                
+                category.sites.forEach(site => {
+                    htmlContent += `        <div class="site">
+            <a href="${site['外网网址']}" title="${site['网站描述']}">${site['网站名称']}</a>
+            ${site['内网网址'] ? `<span class="desc">[内网: ${site['内网网址']}]</span>` : ''}
+        </div>
+`;
+                });
+                
+                htmlContent += `    </div>
+`;
+            });
+            
+            htmlContent += `</body>
+</html>`;
+            
+            const blob = new Blob([htmlContent], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const date = new Date();
+            const fileName = `SunPanel解析结果_${date.getFullYear()}${(date.getMonth()+1).toString().padStart(2,'0')}${date.getDate().toString().padStart(2,'0')}.html`;
+            
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+
+        // 导出为SunPanel格式
+        exportSunPanelBtn.addEventListener('click', () => {
+            if (parsedData.length === 0) {
+                alert('没有可导出的数据');
+                return;
+            }
+            
+            const categoriesMap = {};
+            parsedData.forEach(item => {
+                const key = `${item['分类排序']}-${item['分类名称']}`;
+                if (!categoriesMap[key]) {
+                    categoriesMap[key] = {
+                        title: item['分类名称'],
+                        sort: item['分类排序'],
+                        children: []
+                    };
+                }
+                
+                if (item['网站名称'] !== '无网站信息') {
+                    categoriesMap[key].children.push({
+                        title: item['网站名称'],
+                        url: item['网址'],
+                        lanUrl: item['内网网址'] || '',
+                        description: item['网站描述'],
+                        sort: item['网站排序'],
+                        icon: {
+                            itemType: 2,
+                            src: "",
+                            text: "",
+                            backgroundColor: "#2a2a2a6b"
+                        },
+                        openMethod: 2,
+                        cardType: 1,
+                        backgroundColor: "#2a2a2a6b",
+                        expandParam: {}
+                    });
+                }
+            });
+            
+            const sunPanelData = {
+                version: 1,
+                appName: "Sun-Panel-Config",
+                exportTime: new Date().toLocaleString(),
+                appVersion: "1.7.0",
+                md5: generateMD5(parsedData),
+                icons: Object.values(categoriesMap).sort((a, b) => a.sort - b.sort)
+            };
+            
+            const jsonContent = JSON.stringify(sunPanelData, null, 2);
+            
+            const blob = new Blob([jsonContent], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const date = new Date();
+            const fileName = `sun-panel_${date.getFullYear()}${(date.getMonth()+1).toString().padStart(2,'0')}${date.getDate().toString().padStart(2,'0')}.json`;
+            
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+
+        // 生成简单的MD5替代校验码
+        function generateMD5(data) {
+            let hash = 0;
+            const str = JSON.stringify(data);
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash;
+            }
+            return Math.abs(hash).toString(16).padStart(32, '0');
+        }
+
+        // 复制结果
+        copyBtn.addEventListener('click', () => {
+            if (parsedData.length === 0) {
+                alert('没有可复制的数据');
+                return;
+            }
+            
+            let headers, text = '';
+            
+            if (currentMode === 'sunpanel-to-common') {
+                headers = '分类排序\t分类名称\t包含数量\t网站排序\t网站名称\t网站描述\t外网网址\t内网网址\n';
+            } else {
+                headers = '分类排序\t分类名称\t网站排序\t网站名称\t网站描述\t网址\t内网网址\n';
+            }
+            
+            text += headers;
+            parsedData.forEach(item => {
+                if (currentMode === 'sunpanel-to-common') {
+                    text += `${item['分类排序']}\t${item['分类名称']}\t${item['包含数量']}\t${item['网站排序'] || ''}\t${item['网站名称']}\t${item['网站描述']}\t${item['外网网址']}\t${item['内网网址']}\n`;
+                } else {
+                    text += `${item['分类排序']}\t${item['分类名称']}\t${item['网站排序'] || ''}\t${item['网站名称']}\t${item['网站描述']}\t${item['网址']}\t${item['内网网址'] || ''}\n`;
+                }
+            });
+            
+            navigator.clipboard.writeText(text).then(() => {
+                alert('复制成功！数据已复制到剪贴板');
+            }).catch(err => {
+                alert('复制失败，请手动复制');
+                console.error(err);
+            });
+        });
+
+        // 清除结果
+        clearBtn.addEventListener('click', () => {
+            resetUI();
+            fileInput.value = '';
+            parsedData = [];
+        });
+
+        // 显示错误信息
+        function showError(message) {
+            loadingIndicator.style.display = 'none';
+            errorText.innerHTML = message;
+            errorMessage.style.display = 'block';
+            actionButtons.style.display = 'none';
+            statsContainer.style.display = 'none';
+        }
+
+        // 重置UI
+        function resetUI() {
+            initialMessage.style.display = 'block';
+            loadingIndicator.style.display = 'none';
+            errorMessage.style.display = 'none';
+            resultTable.style.display = 'none';
+            actionButtons.style.display = 'none';
+            statsContainer.style.display = 'none';
+            resultBody.innerHTML = '';
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('页面加载完成，初始化上传功能');
+            initUploadFunctions();
+            
+            // 模式切换事件
+            modeToggle.addEventListener('change', function() {
+                currentMode = this.checked ? 'common-to-sunpanel' : 'sunpanel-to-common';
+                updateUIForMode();
+                resetUI();
+            });
+        });
+    </script>
+</body>
+</html>
+    
